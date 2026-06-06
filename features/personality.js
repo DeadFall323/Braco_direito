@@ -7,6 +7,8 @@ const farmFeature = require('./farm');
 const craftingFeature = require('./crafting');
 const inventoryFeature = require('./inventory');
 const memoryFeature = require('./memory');
+const combatFeature = require('./combat'); // Novo: Importa o radar e o ataque
+const armoryFeature = require('./armory'); // Novo: Importa a fabricação de armas[cite: 13]
 
 function initPersonality(bot) {
     bot.memoria = memoryFeature.carregarMemoria(bot.username);
@@ -117,23 +119,58 @@ async function pensar(bot) {
     const isNoite = timeOfDay >= 13000 && timeOfDay <= 23000;
 
     // ==========================================
-    // PRIORIDADE 0: SOBREVIVÊNCIA E FOME
+    // PRIORIDADE 0: SOBREVIVÊNCIA, COMBATE E FOME
     // ==========================================
+
+    // 0.1 Fuga Desesperada (Vida baixa independentemente de quem ataca)
     if (saude.emPerigo && bot.estadoAtual !== 'fuga_desesperada') {
         bot.estadoAtual = 'fuga_desesperada';
+        combatFeature.pararCombate(bot); // Larga a espada e o arco
         bot.pathfinder.setGoal(null);
-        console.log('[Fazendeiro] Sendo atacado! Fugindo para salvar a vida!');
-        survivalFeature.fugaEstrategica(bot);
+        console.log('[Sobrevivência] Estou a morrer! Fugindo para salvar a vida!');
+        survivalFeature.fugaEstrategica(bot); // Corre para a base ou longe[cite: 14]
         return;
     }
 
-    if (saude.precisaComer && bot.estadoAtual !== 'comendo' && bot.estadoAtual !== 'fuga_desesperada') {
+    // 0.2 Radar de Ameaças (Zumbis, Creepers, etc.)
+    const ameacaPerto = combatFeature.detectarAmeaca(bot); // Raio de 16 blocos
+
+    if (ameacaPerto && bot.estadoAtual !== 'fuga_desesperada') {
+        // Se há um monstro perto, avalia se pode lutar (tem arma, tem vida, etc.)[cite: 12]
+        if (combatFeature.deveLutar(bot)) {
+            bot.estadoAtual = 'em_combate';
+            bot.pathfinder.setGoal(null); // Para o que estava a fazer (plantar/andar)
+
+            // Tenta defender-se com o escudo se tiver um[cite: 12]
+            await combatFeature.tentarDefender(bot, ameacaPerto);
+
+            // Ataca o alvo dinamicamente (usa arco se for creeper/esqueleto e tiver munição)[cite: 12]
+            await combatFeature.atacarAlvo(bot, ameacaPerto);
+            return; // Bloqueia todo o resto do cérebro enquanto a luta durar!
+
+        } else if (bot.estadoAtual !== 'fugindo_monstro') {
+            // Não pode lutar (sem arma, sem vida ou regra não permite)[cite: 12]
+            bot.estadoAtual = 'fugindo_monstro';
+            combatFeature.pararCombate(bot); // Cancela qualquer PVP ativo[cite: 12]
+            console.log('[Sobrevivência] Monstro perto e não posso lutar! Recuando...');
+            survivalFeature.fugaEstrategica(bot); // Foge usando a estratégia de sobrevivência[cite: 14]
+            return;
+        }
+    } else if (bot.estadoAtual === 'em_combate' || bot.estadoAtual === 'fugindo_monstro') {
+        // A ameaça foi neutralizada ou ficou longe! Volta à normalidade.
+        combatFeature.pararCombate(bot); // Reseta as variáveis de tiro e limpa os targets[cite: 12]
+        bot.estadoAtual = 'ocioso';
+        console.log('[Sobrevivência] Área limpa! Voltando aos afazeres.');
+    }
+
+    // 0.3 Comer (A fome é crítica, mas se estiver a lutar, não para para comer!)
+    if (saude.precisaComer && bot.estadoAtual !== 'comendo' && bot.estadoAtual !== 'fuga_desesperada' && bot.estadoAtual !== 'em_combate') {
         const estadoAnterior = bot.estadoAtual;
         bot.estadoAtual = 'comendo';
         const conseguiuComer = await vitalsFeature.comer(bot);
 
         if (!conseguiuComer) {
-            console.log('[Fazendeiro] Fiquei sem marmita. Vou procurar comida na natureza.');
+            console.log('[Sobrevivência] Fiquei sem marmita. Vou procurar comida na natureza.');
             bot.estadoAtual = 'buscando_comida';
             await foodFeature.procurarComida(bot);
             bot.estadoAtual = 'ocioso';
@@ -304,6 +341,15 @@ async function pensar(bot) {
     // PRIORIDADE 2: A ROTINA NA ROÇA (DIA)
     // ==========================================
     if (bot.estadoAtual === 'ocioso' && !bot.pathfinder.isMoving()) {
+
+        // 2.1 Preparação Militar (Só faz se estiver ocioso e seguro)
+        // O João vai verificar se precisa de fabricar espadas ou escudos novos[cite: 13]
+        const fabricouArma = await armoryFeature.fabricarEquipamentosFaltantes(bot);
+        if (fabricouArma) return;
+
+        // O João vai revistar os próprios bolsos para ver se tem um capacete ou peitoral melhor do que o atual e vesti-lo[cite: 12]
+        const equipouArmadura = await combatFeature.equiparMelhorArmadura(bot);
+        if (equipouArmadura) return;
 
         if (inventoryFeature.inventarioEstaCheio(bot)) {
             const blocoBau = bot.findBlock({ matching: bot.registry.blocksByName['chest']?.id, maxDistance: 15 });

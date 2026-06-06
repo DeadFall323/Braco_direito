@@ -1,7 +1,8 @@
 const vitalsFeature = require('./vitals');   
 const gatherFeature = require('./gather');   
 const { goals } = require('mineflayer-pathfinder');   
-const memoryFeature = require('./memory');   
+const memoryFeature = require('./memory');
+const inventoryFeature = require('./inventory');
 
 async function pensarComOllama(bot, usernameJogador, mensagemDoJogador) {
     console.log(`\n======================================================`);   
@@ -45,8 +46,9 @@ async function pensarComOllama(bot, usernameJogador, mensagemDoJogador) {
     - [ACAO_GUARDA] (proteger e vigiar)
     - [ACAO_TRABALHAR] (voltar a rotina civil)
     - [ACAO_COLETAR:material:quantidade] (Material válido: madeira, pedra, terra).
-    - Se o jogador escolher qual colheita plantar: [ACAO_PLANTIO:material] (Ex: trigo, cenoura, batata, beterraba)
-    - Se o jogador pedir um relatório, inventário ou perguntar o que você tem/produziu: [ACAO_RELATORIO]
+    - Se o jogador mandar focar em UMA plantação (ex: "plante apenas batata"): [ACAO_PLANTIO:material] (Ex: batata, trigo, cenoura)
+    - Se o jogador mandar plantar QUALQUER coisa / misto (ex: "plante o que quiser"): [ACAO_PLANTIO:livre]
+    - Se o jogador avisar que tem um item no baú ou mandar você buscar algo num baú: [ACAO_BUSCAR_BAU:material] (Ex: trigo, batata)
     
 
     Regras OBRIGATÓRIAS:
@@ -149,11 +151,35 @@ async function pensarComOllama(bot, usernameJogador, mensagemDoJogador) {
                         if (!falaDoBot) falaDoBot = `Aqui está o relatório do meu inventário: ${relatorio}`;
                     }
                     break;
+
+                case 'BUSCAR_BAU':
+                    if (parametro) {
+                        bot.pathfinder.setGoal(null);
+                        bot.estadoAtual = 'trabalhando';
+                        if (!falaDoBot) falaDoBot = `Entendido! Vou revirar os baús atrás de ${parametro}!`;
+
+                        // DICA CHAVE: Limpa a trava anti-spam para ele obedecer imediatamente!
+                        bot.pausaPlantio = 0;
+
+                        // Dispara a busca em segundo plano para não travar a conversa
+                        inventoryFeature.procurarItemEmBaus(bot, parametro).then((achou) => {
+                            bot.estadoAtual = 'ocioso';
+                        });
+                    }
+                    break;
+                    break;
                 case 'PLANTIO':
                     if (!bot.memoria.regras) bot.memoria.regras = {};
-                    bot.memoria.regras.preferenciaPlantio = parametro;
+
+                    if (parametro === 'livre' || parametro === 'qualquer') {
+                        bot.memoria.regras.preferenciaPlantio = 'livre';
+                        if (!falaDoBot) falaDoBot = "Entendido! Voltei ao modo misto. Vou plantar qualquer semente que eu tiver.";
+                    } else {
+                        bot.memoria.regras.preferenciaPlantio = parametro;
+                        if (!falaDoBot) falaDoBot = `Entendido! De agora em diante vou focar em plantar apenas ${parametro}.`;
+                    }
+
                     memoryFeature.salvarMemoria(bot.username, bot.memoria);
-                    if (!falaDoBot) falaDoBot = `Entendido! De agora em diante vou plantar apenas ${parametro}.`;
                     break;
                 default:
                     console.log(`[Ollama ⚠️] Ação ${acao} não reconhecida pelo sistema.`);   

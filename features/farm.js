@@ -1,119 +1,127 @@
 const { goals } = require('mineflayer-pathfinder');
 
 const CULTIVOS = [
-    { nomePopular: 'trigo', bloco: 'wheat', idadeMaxima: 7, semente: 'wheat_seeds' },  
-{ nomePopular: 'cenoura', bloco: 'carrots', idadeMaxima: 7, semente: 'carrot' },  
-{ nomePopular: 'batata', bloco: 'potatoes', idadeMaxima: 7, semente: 'potato' },  
-{ nomePopular: 'beterraba', bloco: 'beetroots', idadeMaxima: 3, semente: 'beetroot_seeds' }  
+    { nomePopular: 'trigo', bloco: 'wheat', idadeMaxima: 7, semente: 'wheat_seeds' },
+    { nomePopular: 'cenoura', bloco: 'carrots', idadeMaxima: 7, semente: 'carrot' },
+    { nomePopular: 'batata', bloco: 'potatoes', idadeMaxima: 7, semente: 'potato' },
+    { nomePopular: 'beterraba', bloco: 'beetroots', idadeMaxima: 3, semente: 'beetroot_seeds' }
 ];
 
 async function cuidarDaFazenda(bot) {
+    // ==========================================
+    // PRIORIDADE 1: COLHER
+    // ==========================================
     const cultivoPronto = bot.findBlock({
         matching: (block) => {
-            const info = CULTIVOS.find(c => c.bloco === block.name);  
-            return info && block.metadata === info.idadeMaxima;  
+            const info = CULTIVOS.find(c => c.bloco === block.name);
+            return info && block.metadata === info.idadeMaxima;
         },
-        maxDistance: 32  
-});
+        maxDistance: 32
+    });
 
     if (cultivoPronto) {
-        console.log(`[Agricultura] Encontrei ${cultivoPronto.name} maduro! Indo colher...`);  
+        console.log(`[Agricultura] Colhendo ${cultivoPronto.name}...`);
         try {
-            await bot.pathfinder.goto(new goals.GoalGetToBlock(cultivoPronto.position.x, cultivoPronto.position.y, cultivoPronto.position.z));  
-            await bot.dig(cultivoPronto);  
-            console.log(`[Agricultura] ${cultivoPronto.name} colhido com sucesso!`);  
-            await new Promise(resolve => setTimeout(resolve, 1000));  
-            return true;  
-        } catch (erro) {
-            console.log("[Agricultura] Erro ao tentar colher:", erro.message);  
-            return false;  
-        }
+            await bot.pathfinder.goto(new goals.GoalGetToBlock(cultivoPronto.position.x, cultivoPronto.position.y, cultivoPronto.position.z));
+            await bot.dig(cultivoPronto);
+            await new Promise(resolve => setTimeout(resolve, 800)); // Pausa para sugar os itens
+            return true;
+        } catch (erro) { return false; }
     }
 
+    // ==========================================
+    // PRIORIDADE 2: PLANTAR (Livre vs Focado)
+    // ==========================================
     const terraAradaVazia = bot.findBlock({
-        matching: bot.registry.blocksByName['farmland']?.id,  
-    maxDistance: 32,  
-    useExtraInfo: (block) => {
-        const blocoAcima = bot.blockAt(block.position.offset(0, 1, 0));  
-        return blocoAcima && (blocoAcima.name === 'air' || blocoAcima.name === 'cave_air');  
-    }
-});
+        matching: bot.registry.blocksByName['farmland']?.id,
+        maxDistance: 32,
+        useExtraInfo: (block) => {
+            const blocoAcima = bot.blockAt(block.position.offset(0, 1, 0));
+            return blocoAcima && (blocoAcima.name === 'air' || blocoAcima.name === 'cave_air');
+        }
+    });
 
     if (terraAradaVazia) {
         const preferencia = bot.memoria?.regras?.preferenciaPlantio;
+        let sementeAlvo = null;
 
-        const sementesUnicas = [...new Set(bot.inventory.items()
-            .filter(i => CULTIVOS.some(c => c.semente === i.name))
-            .map(i => i.name))];
-
-        if (sementesUnicas.length === 0) return false;
-
-        if (!preferencia && sementesUnicas.length > 1) {
-            const nomes = sementesUnicas.map(s => CULTIVOS.find(c => c.semente === s).nomePopular).join(', ');
-            bot.chat(`Chefe, a terra está pronta e eu tenho sementes de ${nomes}. Qual quer que eu plante?`);
-
-            if(!bot.memoria.regras) bot.memoria.regras = {};
-            bot.memoria.regras.preferenciaPlantio = 'aguardando_ordem';
-            return true;
+        // 1. O que o Mestre mandou plantar?
+        if (preferencia && preferencia !== 'livre' && preferencia !== 'qualquer') {
+            const info = CULTIVOS.find(c => c.nomePopular === preferencia || c.semente === preferencia);
+            if (info) sementeAlvo = info.semente;
         }
 
-        if (preferencia === 'aguardando_ordem') return false;
-
-        // Define a semente a usar (a preferida, ou a única que ele tem)
-        let sementeEscolhida = null;
-        if (preferencia && preferencia !== 'aguardando_ordem') {
-            // CORREÇÃO: Agora ele aceita tanto o nome em português (cenoura) quanto em inglês (carrot)
-            const infoCultivo = CULTIVOS.find(c => c.nomePopular === preferencia || c.semente === preferencia);
-            sementeEscolhida = infoCultivo ? infoCultivo.semente : null;
-        } else if (sementesUnicas.length === 1) {
-            sementeEscolhida = sementesUnicas[0];
+        // 2. Busca na mochila
+        let itemNaMochila = null;
+        if (sementeAlvo) {
+            // Modo Focado: Procura apenas a semente exigida
+            itemNaMochila = bot.inventory.items().find(i => i.name === sementeAlvo);
+        } else {
+            // Modo Livre: Pega a primeira semente válida que achar
+            itemNaMochila = bot.inventory.items().find(i => CULTIVOS.some(c => c.semente === i.name));
+            if (itemNaMochila) sementeAlvo = itemNaMochila.name;
         }
 
-        // Se ele não tem a semente preferida na mochila, avisa e reseta a ordem!
-        // Se ele não tem a semente preferida na mochila, VAI PROCURAR NOS BAÚS!
-        let itemNaMochila = bot.inventory.items().find(i => i.name === sementeEscolhida);
+        // 3. Acabou na mochila? Modo Almoxarifado (Vasculha os Baús)
+        // 3. Acabou na mochila? Modo Almoxarifado (Vasculha os Baús)
+        if (!itemNaMochila && sementeAlvo) {
 
-        if (!itemNaMochila) {
-            console.log(`[Agricultura] Fiquei sem ${sementeEscolhida}. Vou procurar nos baús próximos...`);
+            // ==========================================
+            // TRAVA ANTI-SPAM: Pausa o plantio por 30s
+            // ==========================================
+            if (bot.pausaPlantio && Date.now() - bot.pausaPlantio < 30000) {
+                return false; // Retorna silenciosamente para não floodar o terminal
+            }
 
-            // Encontra até 5 baús num raio de 15 blocos
+            console.log(`[Agricultura] Sem ${sementeAlvo} na mochila. Buscando nos baús da base...`);
             const bausProximos = bot.findBlocks({ matching: bot.registry.blocksByName['chest']?.id, maxDistance: 15, count: 5 });
-            let encontrouNoBau = false;
+            let pegouDoBau = false;
 
             for (const pos of bausProximos) {
                 const blocoBau = bot.blockAt(pos);
                 try {
-                    // Vai até ao baú
                     if (bot.entity.position.distanceTo(blocoBau.position) > 2) {
                         await bot.pathfinder.goto(new goals.GoalGetToBlock(blocoBau.position.x, blocoBau.position.y, blocoBau.position.z));
                     }
-
                     const bau = await bot.openContainer(blocoBau);
-                    const itemAlvo = bau.containerItems().find(i => i.name === sementeEscolhida);
+                    const itemNoBau = bau.containerItems().find(i => i.name === sementeAlvo);
 
-                    // Se achou a semente, retira até 64 unidades!
-                    if (itemAlvo) {
-                        await bau.withdraw(itemAlvo.type, itemAlvo.metadata, Math.min(itemAlvo.count, 64));
-                        encontrouNoBau = true;
-                        console.log(`[Agricultura] Bingo! Achei as sementes no baú.`);
+                    if (itemNoBau) {
+                        // Tira um "pack" inteiro do baú para render
+                        await bau.withdraw(itemNoBau.type, itemNoBau.metadata, Math.min(itemNoBau.count, 64));
+                        pegouDoBau = true;
                     }
                     await bau.close();
-
-                    if (encontrouNoBau) break; // Para de procurar se já achou
+                    if (pegouDoBau) break; // Achou! Pode parar de olhar outros baús.
                 } catch (e) {
-                    console.log("[Agricultura] Não consegui abrir este baú.");
+                    // Ignora silenciosamente baús bloqueados ou falhas de caminho
                 }
             }
 
-            // Se procurou em tudo e não achou, aí sim ele avisa o chefe
-            if (!encontrouNoBau) {
-                bot.chat(`Chefe, as sementes acabaram na minha mochila e não encontrei mais nenhuma nos nossos baús!`);
-                bot.memoria.regras.preferenciaPlantio = null; // Reseta a ordem
-                return true;
+            if (!pegouDoBau) {
+                console.log(`[Agricultura] Fiquei sem ${sementeAlvo} nos baús também! Pausando plantio por 30 segundos.`);
+                bot.pausaPlantio = Date.now(); // ATIVA O COOLDOWN AQUI!
+                return false;
             } else {
-                return true; // Vai tentar plantar no próximo "tick" do cérebro, agora que tem as sementes!
+                bot.pausaPlantio = 0; // Desativa o cooldown se achou
+                return true;
             }
         }
+
+        // 4. Tem a semente na mão? Mão na terra!
+        if (itemNaMochila) {
+            try {
+                await bot.pathfinder.goto(new goals.GoalGetToBlock(terraAradaVazia.position.x, terraAradaVazia.position.y, terraAradaVazia.position.z));
+                await bot.equip(itemNaMochila, 'hand');
+                await bot.placeBlock(terraAradaVazia, { x: 0, y: 1, z: 0 });
+                return true;
+            } catch (e) {
+                console.log("[Agricultura] Problema com a terra:", e.message);
+                return false;
+            }
         }
     }
+    return false;
+}
+
 module.exports = { cuidarDaFazenda };
