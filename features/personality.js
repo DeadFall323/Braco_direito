@@ -11,9 +11,13 @@ const inventoryFeature = require('./inventory');
 const memoryFeature = require('./memory');
 
 function initPersonality(bot) {
-    // 1. CARREGA A MEMÓRIA PERMANENTE (JSON)
+    // Evita dupla inicialização
+    if (bot.personalityInicializada) return;
+
+    // 1. Carrega memória permanente (JSON)
     bot.memoria = memoryFeature.carregarMemoria(bot.username);
-    // 2. CRIA A MEMÓRIA DE CURTO PRAZO (Esquece ao reiniciar)
+
+    // 2. Memória de curto prazo
     bot.memoriaCurta = {
         ultimoInimigo: null,
         ultimoJogadorVisto: null,
@@ -21,75 +25,48 @@ function initPersonality(bot) {
         ultimaPosicaoSegura: null
     };
 
-    // Mescla as informações legadas para não quebrar módulos antigos
+    // 3. Personalidade
     if (!bot.personality) {
         bot.personality = {
             nome: bot.username,
             tipo: 'Construtor',
             nivelDeMedo: 80,
-            homePosition: bot.memoria.locais.casa, // Puxa a casa direto do JSON!
+            homePosition: bot.memoria.locais?.casa || null,
             raioDeAcao: 30,
             comportamentoNoturno: 'dormir',
             funcao: 'trabalhador'
         };
     }
 
+    bot.personality.nome = bot.username;
     bot.estadoAtual = 'ocioso';
+    bot.ultimoEstadoMonitorado = 'ocioso';
     bot.pathfinder.setGoal(null);
 
-    if (bot.personalityInicializada) return;
     bot.personalityInicializada = true;
     bot.pensando = false;
 
-    // Salva a memória no arquivo JSON automaticamente a cada 30 segundos!
+    // Salva memória a cada 30 segundos
     setInterval(() => {
         memoryFeature.salvarMemoria(bot.username, bot.memoria);
     }, 30000);
 
-    if (!bot.personality) {
-        bot.personality = {
-            nome: bot.username,
-            tipo: 'Construtor',
-            nivelDeMedo: 80,
-            homePosition: null,
-            raioDeAcao: 30,
-            comportamentoNoturno: 'dormir',
-            funcao: 'trabalhador' // Define se ele é 'trabalhador' ou 'guarda'
-        };
-    }
-
-    bot.personality.nome = bot.username;
-    bot.estadoAtual = 'ocioso';
-    bot.ultimoEstadoMonitorado = 'ocioso'; // NOVO: Memória para o Log
-    bot.pathfinder.setGoal(null);
-
-    if (bot.personalityInicializada) return;
-
-    bot.personalityInicializada = true;
-    bot.pensando = false;
-
+    // Loop principal do FSM — BUG CORRIGIDO: apenas UM setInterval
     setInterval(async () => {
         if (bot.pensando) return;
-
         bot.pensando = true;
         try {
             await pensar(bot);
 
-            // ==========================================
-            // 🛠️ MONITOR DE ESTADOS (RAIO-X DE DEBUG) 🛠️
-            // ==========================================
+            // Monitor de estados para debug
             if (bot.ultimoEstadoMonitorado !== bot.estadoAtual) {
-                // Captura os dados vitais no momento da decisão
                 const vida = bot.health ? Math.round(bot.health) : 20;
                 const fome = bot.food ? Math.round(bot.food) : 20;
                 const itensMochila = bot.inventory ? bot.inventory.items().length : 0;
-
-                console.log(`\n[FSM Debug] 🧠 MUDANÇA DE ESTADO: [${bot.ultimoEstadoMonitorado.toUpperCase()}] ===> [${bot.estadoAtual.toUpperCase()}]`);
-                console.log(`[FSM Debug] 📊 Status: Vida ${vida}/20 | Fome ${fome}/20 | Inventário: ${itensMochila}/36 slots ocupados\n`);
-
+                console.log(`\n[FSM Debug] 🧠 MUDANÇA: [${bot.ultimoEstadoMonitorado.toUpperCase()}] ===> [${bot.estadoAtual.toUpperCase()}]`);
+                console.log(`[FSM Debug] 📊 Vida ${vida}/20 | Fome ${fome}/20 | Inventário: ${itensMochila}/36\n`);
                 bot.ultimoEstadoMonitorado = bot.estadoAtual;
             }
-
         } finally {
             bot.pensando = false;
         }
@@ -104,70 +81,64 @@ async function pensar(bot) {
     const isNoite = timeOfDay >= 13000 && timeOfDay <= 23000;
 
     // ==========================================
-    // PRIORIDADE 0.5: RADAR DE AMEAÇAS E DEFESA
+    // PRIORIDADE 0.5: RADAR DE AMEAÇAS
     // ==========================================
     const ameaca = combatFeature.detectarAmeaca(bot);
 
     if (ameaca) {
         if (combatFeature.deveLutar(bot)) {
-            // MODO LUTA
             if (bot.estadoAtual !== 'em_combate' || bot.alvoAtual !== ameaca) {
                 bot.estadoAtual = 'em_combate';
                 bot.alvoAtual = ameaca;
                 bot.pathfinder.setGoal(null);
                 console.log(`[Combate] Focando no alvo: ${ameaca.name}!`);
             }
-
             combatFeature.atacarAlvo(bot, ameaca);
             combatFeature.tentarDefender(bot, ameaca);
             return;
-
         } else {
-            // MODO FUGA
             if (bot.estadoAtual !== 'fuga_desesperada') {
                 bot.estadoAtual = 'fuga_desesperada';
                 combatFeature.pararCombate(bot);
                 bot.pathfinder.setGoal(null);
-
                 console.log(`[Combate] Socorro! Um ${ameaca.name} me achou e estou em desvantagem!`);
                 survivalFeature.fugaEstrategica(bot);
-
+                // BUG CORRIGIDO: passando os 3 argumentos corretamente
                 llmFeature.pensarComOllama(
-                    bot, bot.username, // Usa o bot.username para a fuga, pois não é um chat de jogador
+                    bot,
+                    bot.username,
                     `Um ${ameaca.name} está te atacando de surpresa e você não consegue lutar! Grite por ajuda de forma bem desesperada.`
                 );
             }
-
             combatFeature.tentarDefender(bot, ameaca);
             return;
         }
     } else if (bot.estadoAtual === 'em_combate' || bot.estadoAtual === 'fuga_desesperada') {
-        console.log("[Combate] A ameaca foi neutralizada ou despistada. Voltando a respirar.");
+        console.log("[Combate] Ameaça neutralizada. Voltando ao normal.");
         combatFeature.pararCombate(bot);
         bot.alvoAtual = null;
         bot.estadoAtual = 'ocioso';
     }
 
     // ==========================================
-    // PRIORIDADE 0: SOBREVIVÊNCIA E FUGA
-    // =========================================
+    // PRIORIDADE 0: SOBREVIVÊNCIA
+    // ==========================================
     if (saude.emPerigo && bot.estadoAtual !== 'fuga_desesperada') {
         bot.estadoAtual = 'fuga_desesperada';
         bot.pathfinder.setGoal(null);
-
-        console.log('[Sistema] Vida critica! Iniciando protocolo de fuga.');
-
+        console.log('[Sistema] Vida crítica! Iniciando protocolo de fuga.');
+        // BUG CORRIGIDO: passando os 3 argumentos corretamente
         llmFeature.pensarComOllama(
-            bot, bot.username,
+            bot,
+            bot.username,
             'Voce esta com pouquissima vida no Minecraft e quase morrendo. Grite por socorro no chat de forma curta e desesperada.'
         );
-
         survivalFeature.fugaEstrategica(bot);
         return;
     }
 
     // ==========================================
-    // PRIORIDADE 1: ALIMENTAÇÃO E CAÇA
+    // PRIORIDADE 1: ALIMENTAÇÃO
     // ==========================================
     if (saude.precisaComer && bot.estadoAtual !== 'comendo' && bot.estadoAtual !== 'fuga_desesperada' && bot.estadoAtual !== 'buscando_comida') {
         const estadoAnterior = bot.estadoAtual;
@@ -176,14 +147,14 @@ async function pensar(bot) {
         const conseguiuComer = await vitalsFeature.comer(bot);
 
         if (!conseguiuComer) {
-            console.log('[Emergencia] Sem comida na mochila! Virando cacador/coletor.');
+            console.log('[Emergencia] Sem comida na mochila! Virando caçador.');
             bot.estadoAtual = 'buscando_comida';
-
+            // BUG CORRIGIDO: passando os 3 argumentos corretamente
             llmFeature.pensarComOllama(
-                bot, bot.username,
+                bot,
+                bot.username,
                 'Voce esta morrendo de fome e nao tem absolutamente nada na mochila para comer. Diga que vai cacar de forma dramatica.'
             );
-
             await foodFeature.procurarComida(bot);
             bot.estadoAtual = 'ocioso';
             return;
@@ -193,16 +164,19 @@ async function pensar(bot) {
     }
 
     // ==========================================
-    // PRIORIDADE 2: CICLO DIA/NOITE E SONO
+    // PRIORIDADE 2: CICLO DIA/NOITE
     // ==========================================
     if (isNoite) {
         if (bot.personality.comportamentoNoturno === 'guarda') {
+            // Guarda acorda se estava dormindo e continua no loop normal
             if (bot.estadoAtual === 'dormindo' || bot.estadoAtual === 'indo_dormir') {
                 bot.estadoAtual = 'ocioso';
                 if (bot.isSleeping) try { await bot.wake(); } catch (e) {}
             }
+            // NÃO retorna — guarda patrulha à noite normalmente
         } else {
-            if (bot.estadoAtual !== 'dormindo' && bot.estadoAtual !== 'fuga_desesperada') {
+            // Trabalhador: dorme ou se tranca em casa
+            if (bot.estadoAtual !== 'dormindo' && bot.estadoAtual !== 'indo_dormir' && bot.estadoAtual !== 'fuga_desesperada') {
                 const cama = bot.findBlock({ matching: block => block.name.endsWith('_bed'), maxDistance: 15 });
 
                 if (cama) {
@@ -222,7 +196,7 @@ async function pensar(bot) {
                 } else if (bot.personality.homePosition && bot.estadoAtual !== 'em_casa') {
                     bot.pathfinder.setGoal(null);
                     bot.estadoAtual = 'em_casa';
-                    console.log(`[Sistema] Escureceu. ${bot.username} voltou para casa para se proteger.`);
+                    console.log(`[Sistema] Escureceu. ${bot.username} voltou para casa.`);
                     bot.pathfinder.setGoal(new goals.GoalBlock(
                         bot.personality.homePosition.x,
                         bot.personality.homePosition.y,
@@ -230,10 +204,11 @@ async function pensar(bot) {
                     ));
                 }
             }
-            return;
+            return; // Trabalhador não faz mais nada à noite
         }
     }
 
+    // Acorda de manhã
     if (!isNoite && (bot.estadoAtual === 'em_casa' || bot.estadoAtual === 'dormindo' || bot.estadoAtual === 'indo_dormir')) {
         if (bot.isSleeping) {
             try { await bot.wake(); } catch (e) {}
@@ -244,47 +219,48 @@ async function pensar(bot) {
     }
 
     // ==========================================
-    // PRIORIDADE 3: ESTADO OCIOSO E TAREFAS
+    // PRIORIDADE 3: ESTADO OCIOSO
     // ==========================================
     if (bot.estadoAtual === 'ocioso') {
 
+        // 3.0 — Vestir melhor armadura
         if (!bot.pathfinder.isMoving()) {
             const vestiuArmadura = await combatFeature.equiparMelhorArmadura(bot);
             if (vestiuArmadura) return;
         }
 
+        // 3.1 — Descarregar inventário cheio
         if (inventoryFeature.inventarioEstaCheio(bot) && !bot.pathfinder.isMoving()) {
             const blocoBau = bot.findBlock({ matching: bot.registry.blocksByName['chest']?.id, maxDistance: 15 });
-
             if (blocoBau) {
                 bot.estadoAtual = 'guardando_itens';
-                console.log("[Logística] Minha mochila esta quase cheia! Indo guardar o excesso no bau...");
+                console.log("[Logística] Mochila quase cheia! Indo guardar no baú...");
                 await inventoryFeature.descarregarInventario(bot, blocoBau);
                 bot.estadoAtual = 'ocioso';
                 return;
             }
         }
 
+        // 3.2 — Fabricar armas/escudo
         if (!bot.pathfinder.isMoving()) {
             bot.estadoAtual = 'fabricando';
             const fabricouArma = await armoryFeature.fabricarEquipamentosFaltantes(bot);
-            if (fabricouArma) {
-                bot.estadoAtual = 'ocioso';
-                return;
-            }
             bot.estadoAtual = 'ocioso';
+            if (fabricouArma) return;
         }
 
+        // 3.3 — Tarefas domésticas (apenas trabalhador)
         if (bot.personality.funcao === 'trabalhador') {
+
+            // Fazer pão
             const itensDeTrigo = bot.inventory.items().filter(item => item.name === 'wheat');
             const totalTrigo = itensDeTrigo.reduce((soma, item) => soma + item.count, 0);
 
             if (totalTrigo >= 128 && !bot.pathfinder.isMoving()) {
                 bot.estadoAtual = 'fabricando';
                 const craftingTable = bot.findBlock({ matching: bot.registry.blocksByName['crafting_table']?.id, maxDistance: 15 });
-
                 if (craftingTable) {
-                    console.log(`[Padaria] Acumulei ${totalTrigo} trigos! Hora de fazer uma grande fornada de pao...`);
+                    console.log(`[Padaria] Acumulei ${totalTrigo} trigos! Fazendo pão...`);
                     try {
                         if (bot.entity.position.distanceTo(craftingTable.position) > 3) {
                             await bot.pathfinder.goto(new goals.GoalGetToBlock(craftingTable.position.x, craftingTable.position.y, craftingTable.position.z));
@@ -293,19 +269,19 @@ async function pensar(bot) {
                         while (trigoRestante >= 3) {
                             const sucesso = await craftingFeature.craftarItem(bot, 'bread', craftingTable);
                             if (!sucesso) break;
-
                             trigoRestante -= 3;
                             await new Promise(resolve => setTimeout(resolve, 600));
                         }
-                        console.log("[Padaria] Fornada finalizada com sucesso!");
+                        console.log("[Padaria] Fornada finalizada!");
                     } catch (erro) {
-                        console.log("[Padaria] Falha ao tentar fazer pao:", erro.message);
+                        console.log("[Padaria] Falha:", erro.message);
                     }
                 }
                 bot.estadoAtual = 'ocioso';
                 return;
             }
 
+            // Assar carnes
             const carneCrua = bot.inventory.items().find(item => foodFeature.CARNES_CRUAS.includes(item.name));
             if (carneCrua && !bot.pathfinder.isMoving()) {
                 bot.estadoAtual = 'cozinhando';
@@ -314,17 +290,16 @@ async function pensar(bot) {
                 return;
             }
 
+            // Cuidar da fazenda
             if (!bot.pathfinder.isMoving()) {
                 bot.estadoAtual = 'cuidando_fazenda';
                 const trabalhouNaFazenda = await farmFeature.cuidarDaFazenda(bot);
-                if (trabalhouNaFazenda) {
-                    bot.estadoAtual = 'ocioso';
-                    return;
-                }
                 bot.estadoAtual = 'ocioso';
+                if (trabalhouNaFazenda) return;
             }
         }
 
+        // 3.4 — Patrulha
         const chanceDePatrulha = bot.personality.funcao === 'guarda' ? 0.60 : 0.05;
         if (Math.random() < chanceDePatrulha && !bot.pathfinder.isMoving()) {
             if (bot.personality.homePosition) {
@@ -332,7 +307,7 @@ async function pensar(bot) {
                 const raioDePatrulha = bot.personality.raioDeAcao * 0.7;
                 const patrulhaX = bot.personality.homePosition.x + (Math.cos(angulo) * raioDePatrulha);
                 const patrulhaZ = bot.personality.homePosition.z + (Math.sin(angulo) * raioDePatrulha);
-
+                console.log(`[Segurança] ${bot.username} patrulhando...`);
                 bot.pathfinder.setGoal(new goals.GoalNear(patrulhaX, bot.personality.homePosition.y, patrulhaZ, 3));
             } else {
                 const randomX = bot.entity.position.x + (Math.random() * 16 - 8);
@@ -340,14 +315,17 @@ async function pensar(bot) {
                 bot.pathfinder.setGoal(new goals.GoalNear(randomX, bot.entity.position.y, randomZ, 2));
             }
         }
-    } // <-- AQUI É O LUGAR CORRETO PARA FECHAR A FUNÇÃO pensar(bot)
 
-    if (Math.random() < 0.05) {
-        const yaw = bot.entity.yaw + (Math.random() * Math.PI - Math.PI / 2);
-        const pitch = (Math.random() * Math.PI / 4) - Math.PI / 8;
-        bot.look(yaw, pitch, true);
-    }
-}
+        // 3.5 — Olhar ao redor ocasionalmente
+        // BUG CORRIGIDO: estava fora da função pensar, agora está dentro do bloco 'ocioso'
+        if (Math.random() < 0.05) {
+            const yaw = bot.entity.yaw + (Math.random() * Math.PI - Math.PI / 2);
+            const pitch = (Math.random() * Math.PI / 4) - Math.PI / 8;
+            bot.look(yaw, pitch, true);
+        }
+
+    } // fim do if (estadoAtual === 'ocioso')
+} // fim da função pensar
 
 function processarComando(bot, username, comando) {
     if (comando.includes('aqui e sua casa')) {
