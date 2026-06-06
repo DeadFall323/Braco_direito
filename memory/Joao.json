@@ -14,7 +14,8 @@
     "usarArcoContraZumbi": true,
     "protegerJogadores": [
       "Kawan"
-    ]
+    ],
+    "preferenciaPlantio": "trigo"
   },
   "conhecimento": {
     "ultimaMorte": null,
