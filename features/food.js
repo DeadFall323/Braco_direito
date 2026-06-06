@@ -1,7 +1,15 @@
-// features/food.js
 const { goals } = require('mineflayer-pathfinder');
 
-const CARNES_CRUAS = ['beef', 'porkchop', 'mutton', 'chicken'];
+// A batata agora é considerada um item "cru" que pode ir ao forno!
+const CARNES_CRUAS = ['beef', 'porkchop', 'mutton', 'chicken', 'potato'];
+
+const RECEITAS_FORNALHA = [
+    { cru: 'beef', assado: 'cooked_beef' },
+    { cru: 'porkchop', assado: 'cooked_porkchop' },
+    { cru: 'mutton', assado: 'cooked_mutton' },
+    { cru: 'chicken', assado: 'cooked_chicken' },
+    { cru: 'potato', assado: 'baked_potato' }
+];
 
 async function procurarComida(bot) {
     console.log("[Nutrição] A fome bateu! Procurando alimento na natureza...");
@@ -16,94 +24,84 @@ async function procurarComida(bot) {
     if (alvo) {
         console.log(`[Nutrição] Avistei um(a) ${alvo.name}! Iniciando caça...`);
         try {
-            // Equipa uma arma se tiver
             const arma = bot.inventory.items().find(i => i.name.includes('sword') || i.name.includes('axe'));
             if (arma) await bot.equip(arma, 'hand');
 
-            // CORREÇÃO CRÍTICA: Usa setGoal sem 'await' para seguir a entidade dinamicamente sem travar o código
             bot.pathfinder.setGoal(new goals.GoalFollow(alvo, 1.5), true);
 
-            // Bate continuamente enquanto a entidade estiver viva no servidor
             while (alvo.isValid) {
-                // Trava de segurança: Aborta a caça se a vida ficar crítica
                 if (bot.health <= 8) {
                     console.log("[Nutrição] Vida crítica! Abortando caça.");
                     bot.pathfinder.setGoal(null);
-                    return false;
+                    return false; 
                 }
-
-                bot.attack(alvo);
-
-                // Espera 800ms (tempo natural de cooldown do machado/espada no Minecraft)
-                await new Promise(resolve => setTimeout(resolve, 800));
+                bot.attack(alvo); 
+                await new Promise(resolve => setTimeout(resolve, 800)); 
             }
 
-            // O animal morreu! Remove o objetivo de seguir e espera os itens caírem
-            bot.pathfinder.setGoal(null);
-            await new Promise(resolve => setTimeout(resolve, 1500));
-            return true;
+            bot.pathfinder.setGoal(null); 
+            await new Promise(resolve => setTimeout(resolve, 1500)); 
+            return true; 
         } catch (erro) {
-            console.log("[Nutrição] Falha ao caçar animal:", erro.message);
-            bot.pathfinder.setGoal(null);
-            return false;
+            console.log("[Nutrição] Falha ao caçar animal:", erro.message); 
+            bot.pathfinder.setGoal(null); 
+            return false; 
         }
     }
 
     // PRIORIDADE 2: Coleta Passiva (Arbustos de Berries)
     const berryBush = bot.findBlock({
-        matching: bot.registry.blocksByName['sweet_berry_bush']?.id,
-        maxDistance: 32
-    });
+        matching: bot.registry.blocksByName['sweet_berry_bush']?.id, 
+    maxDistance: 32 
+}); 
 
     if (berryBush) {
-        console.log("[Nutrição] Encontrei arbustos de frutas!");
+        console.log("[Nutrição] Encontrei arbustos de frutas!"); 
         try {
-            await bot.pathfinder.goto(new goals.GoalGetToBlock(berryBush.position.x, berryBush.position.y, berryBush.position.z));
-            await bot.activateBlock(berryBush);
-            await new Promise(resolve => setTimeout(resolve, 500));
-            return true;
+            await bot.pathfinder.goto(new goals.GoalGetToBlock(berryBush.position.x, berryBush.position.y, berryBush.position.z)); 
+            await bot.activateBlock(berryBush); 
+            await new Promise(resolve => setTimeout(resolve, 500)); 
+            return true; 
         } catch (erro) {
-            console.log("[Nutrição] Erro ao colher frutinhas.");
+            console.log("[Nutrição] Erro ao colher frutinhas."); 
         }
     }
 
-    console.log("[Nutrição] Não encontrei nenhuma fonte de comida por perto.");
-    return false;
+    console.log("[Nutrição] Não encontrei nenhuma fonte de comida por perto."); 
+    return false; 
 }
 
-// Tier 2: O Chef João usa a fornalha para assar as carnes
 async function cozinharComida(bot) {
-    const blocoFornalha = bot.findBlock({ matching: bot.registry.blocksByName['furnace']?.id, maxDistance: 15 });
-    if (!blocoFornalha) return false;
+    const blocoFornalha = bot.findBlock({ matching: bot.registry.blocksByName['furnace']?.id, maxDistance: 15 }); 
+    if (!blocoFornalha) return false; 
 
-    const carneCrua = bot.inventory.items().find(item => CARNES_CRUAS.includes(item.name));
-    const combustivel = bot.inventory.items().find(item => item.name.includes('log') || item.name.includes('planks') || item.name.includes('coal'));
+    const itemCru = bot.inventory.items().find(item => CARNES_CRUAS.includes(item.name)); 
+    const combustivel = bot.inventory.items().find(item => item.name.includes('coal') || item.name.includes('log') || item.name.includes('planks')); 
 
-    if (carneCrua && combustivel) {
-        console.log(`[Nutrição] Assando ${carneCrua.name} na fornalha para render mais...`);
+    if (itemCru && combustivel) {
+        console.log(`[Cozinha] Vou assar ${itemCru.name} na fornalha!`);
         try {
             if (bot.entity.position.distanceTo(blocoFornalha.position) > 3) {
-                await bot.pathfinder.goto(new goals.GoalGetToBlock(blocoFornalha.position.x, blocoFornalha.position.y, blocoFornalha.position.z));
+                await bot.pathfinder.goto(new goals.GoalGetToBlock(blocoFornalha.position.x, blocoFornalha.position.y, blocoFornalha.position.z)); 
             }
 
-            const fornalha = await bot.openFurnace(blocoFornalha);
-            await fornalha.putInput(carneCrua.type, null, 1);
-            await fornalha.putFuel(combustivel.type, null, 1);
+            const fornalha = await bot.openFurnace(blocoFornalha); 
+            await fornalha.putInput(itemCru.type, null, 1); 
+            await fornalha.putFuel(combustivel.type, null, 1); 
 
-            // Espera exatos 10 segundos
-            await new Promise(resolve => setTimeout(resolve, 10000));
+            await new Promise(resolve => setTimeout(resolve, 10500)); // Tempo para assar 1 item
 
-            await fornalha.takeOutput();
-            fornalha.close();
+            await fornalha.takeOutput(); 
+            fornalha.close(); 
 
-            console.log("[Nutrição] Carne assada com sucesso!");
+            console.log("[Cozinha] Terminei de assar!");
             return true;
         } catch (erro) {
-            console.log("[Nutrição] Deu problema na fornalha:", erro.message);
-            return false;
+            console.log("[Cozinha] Deu problema na fornalha:", erro.message); 
+            return false; 
         }
     }
-    return false;
+    return false; 
 }
 
-module.exports = { procurarComida, cozinharComida, CARNES_CRUAS };
+module.exports = { procurarComida, cozinharComida, CARNES_CRUAS, RECEITAS_FORNALHA };
