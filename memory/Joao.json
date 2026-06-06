@@ -1,0 +1,29 @@
+{
+  "nome": "Joao",
+  "dono": "Kawan",
+  "locais": {
+    "casa": {
+      "x": -25.49913950775599,
+      "y": 65,
+      "z": 60.5
+    },
+    "vila": null
+  },
+  "regras": {
+    "lutarSemArmadura": false,
+    "usarArcoContraZumbi": true,
+    "protegerJogadores": [
+      "Kawan"
+    ]
+  },
+  "conhecimento": {
+    "ultimaMorte": null,
+    "ultimaExploracao": null
+  },
+  "jogadores": {
+    "Kawan": {
+      "amigo": true,
+      "confianca": 100
+    }
+  }
+}
